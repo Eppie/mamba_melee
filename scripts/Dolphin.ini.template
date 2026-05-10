@@ -1,0 +1,77 @@
+[General]
+ShowLag = False
+ShowFrameCount = False
+RecursiveISOPaths = False
+NANDRootPath =
+WirelessMac =
+
+[Core]
+HLE_BIOS = False
+TimingVariance = 40
+CPUCore = 1
+Fastmem = True
+DSPHLE = True
+CPUThread = True
+SkipIdle = True
+SyncOnSkipIdle = True
+SyncGPU = False
+SyncGpuMaxDistance = 200000
+SyncGpuMinDistance = -200000
+SyncGpuOverclock = 1.0
+FPRF = False
+AccurateNaNs = False
+DefaultISO = {{MELEE_ISO}}
+DVDRoot =
+Apploader =
+EnableCheats = True
+SelectedLanguage = 0
+OverrideRegionSettings = False
+DPL2Decoder = False
+TimeProfiling = False
+Latency = 2
+MemcardAPath =
+MemcardBPath =
+SlippiOnlineDelay = 2
+SlippiSaveReplays = False
+SlippiRegenerateReplays = True
+SlippiReplayRegenerateDir = {{REGEN_DIR}}
+SlippiReplayMonthFolders = False
+EmulationSpeed = 0.0
+GFXBackend = Null
+EnableCustomRTC = False
+
+[DSP]
+EnableJIT = True
+DumpAudio = False
+DumpAudioSilent = False
+DumpUCode = False
+Backend = No audio backend
+Volume = 0
+CaptureLog = False
+
+[Display]
+Fullscreen = False
+RenderToMain = False
+RenderWindowWidth = 320
+RenderWindowHeight = 240
+ProgressiveScan = True
+PAL60 = True
+DisableScreenSaver = True
+HideCursor = False
+
+[Interface]
+ConfirmStop = False
+UsePanicHandlers = False
+OnScreenDisplayMessages = False
+HideCursor = False
+AutoHideCursor = False
+
+[Analytics]
+ID =
+Enabled = False
+PermissionAsked = True
+
+[Network]
+SSLDumpRead = False
+SSLDumpWrite = False
+SSLVerifyCert = False
