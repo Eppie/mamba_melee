@@ -9,7 +9,7 @@ Source: 1,200 Fox-ditto replays, regenerated to format v3.19. Stats below are po
 3. **L vs R digital are also indistinguishable to the game.** Collapse to single shield head.
 4. **B almost always means "directional special."** 84% of B-press events happen with the stick at full deflection.
 5. **C-stick diagonals matter** (NE, NW, SE, SW collectively ~13% of full-press events). 9-class (center + 8 octants); 5-class loses the diagonals.
-6. **Shield is bimodal too.** Within shielding events: 10% are in the lightshield-just-past-threshold band (0.30–0.40), 81% are slammed to 1.0, and the middle is sparse. **4-class shield head** `{none, light, mid, full}` captures the real structure.
+6. **Shield is bimodal too.** Within shielding events: 10% are in the lightshield-just-past-threshold band (0.30–0.40), 81% are slammed to 1.0, and the middle is so sparse it's not worth its own class. **3-class shield head** `{none, lightshield (~0.30), full (1.0)}` matches the values players actually aim for; the controller bridge emits `0.0`, `0.35`, or `1.0`.
 7. **`triggers_physical.l/r` is lost in regenerated replays** (same class of issue as `buttons_physical`). The processed `triggers` scalar is preserved and is what we should train on.
 
 ## Dataset
@@ -94,7 +94,7 @@ Shielding is **18.8% of frames**. Within shielding events the distribution is sh
 | 0.40–0.95 (mid) | 7.7% | 1.4% |
 | ≥ 0.95 (effectively full) | **82.1%** | 15.4% |
 
-**Decision:** 4-class shield head `{none, light (0.30–0.40), mid (0.40–0.95), full (≥0.95)}`. This captures the two real modes (lightshield-min and full-press) plus a catch-all for the sparse middle. More than 4 bins doesn't help — the middle range is genuinely sparse.
+**Decision:** 3-class shield head `{none, lightshield (~0.30), full (1.0)}`. The middle range (0.40–0.95) is sparse enough that snapping to "the values players actually aim for" beats binning a continuum that doesn't really exist. Why those exact values: 0.30 is the minimum trigger value that engages shield, and *strongest lightshield* (in terms of weak damage absorption / max pushback) is at the lowest engaged value. 1.0 is full shield. The controller bridge emits `0.0`, `0.35` (safely past the 0.30 threshold), or `1.0`.
 
 Note that `triggers_physical.l/r` are zeroed by the regenerate path (verified directly); train on the `triggers` scalar, which IS preserved.
 
@@ -132,7 +132,7 @@ L held 8.5%, R held 4.8%. Some players prefer L, some R. Combined digital `L|R �
 
 ## Action coordination
 
-What is the stick magnitude on the frame A / B / Z is *just pressed*?
+### Stick magnitude when buttons are just-pressed
 
 | press | n events | mag < 0.05 (centered) | mag in (0.28, 0.8) (mid) | mag ≥ 0.95 (full) |
 |---|---|---|---|---|
@@ -140,15 +140,30 @@ What is the stick magnitude on the frame A / B / Z is *just pressed*?
 | B | 125k | 15% | 0.6% | 84% |
 | Z | 54k | 23% | 4.4% | 71% |
 
-The pattern is bimodal in all three: presses cluster at *centered stick* and *full stick*, with the mid-magnitude range thinly populated. (The mid range is a mix of tilts, mid-stick aerials with drift, and dash attacks — this number alone doesn't disambiguate them; that would require correlating action_state at the moment of press.)
+A and B are bimodal between centered and full. B's bimodality is extreme — 84% of B presses are at full deflection (= directional special). Z is similar to A.
 
-For B specifically the bimodality is extreme — 84% of B presses are with the stick at full deflection. B + full-stick = directional special (Fox shine if down, illusion if side, firefox if up). B + centered = neutral special (laser).
+### What does A actually become? (4-frame lookahead on action state)
 
-When the c-stick is full-pressed, A is *also* pressed on the same frame only 2.4% of the time → c-stick smashes and A presses are mostly separable events.
+To answer this properly we have to look at the resulting action state, not just the input. Pre-Frame[T] captures inputs *before* they're consumed by frame T's processing; Post-Frame[T] captures state *after*. Same-frame correlation works in principle but multi-frame attack startups mean the unambiguous "tilt vs jab" classification often only shows on T+1 or T+2. Using the resulting action state in `[T, T+3]`:
+
+| stick mag at A press | tilts (utilt+ftilt+dtilt) | aerial | jab | dash atk | grab | smashes |
+|---|---|---|---|---|---|---|
+| centered (<0.05) | 0.3% | **50%** | 10% | 1.9% | 14% | 0.7% |
+| walk-low (0.28–0.5) | **46%** | 9.9% | 0.6% | 2.0% | 23% | 0.4% |
+| walk-high (0.5–0.7) | **64%** | 4.5% | 0.2% | 1.5% | 14% | 0.6% |
+| dash zone (0.7–0.8) | **48%** | 7.8% | 0.1% | 2.7% | 21% | 1.7% |
+| smash (≥0.8) | 15% | 32% | 0.1% | 7.4% | 14% | 1.5% |
+
+Actual story:
+- **Centered + A → aerials and grabs.** Jab is only 10% even with centered stick — Fox doesn't jab much. Aerials dominate because A in the air = aerial regardless of stick.
+- **Mid-stick + A → utilt-heavy tilts.** Walk-low: 45% utilt. Walk-high: 63% utilt. Fox's utilt is one of his bread-and-butter combo starters, used heavily.
+- **Smash-mag + A → mostly aerials with stick angled** (player is airborne at smash-stick angle), not fsmashes (those are c-stick).
+
+When the c-stick is full-pressed, A is also pressed on the same frame only 2.4% of the time → c-stick smashes and A presses are mostly separable events.
 
 ### Implication for the autoregressive A | stick link
 
-A press probability changes substantially with stick magnitude: ~7× higher conditional on full-deflection vs. mid-magnitude (after normalising by base rates). The autoregressive ordering (predict stick, then A | stick) helps the model represent that. A fully independent factoring would still work; calibration on combined-input frames would be slightly worse.
+The conditional action mix changes dramatically across stick-magnitude buckets — centered → 50% aerial / 14% grab; mid-stick → 45–64% utilt; smash → 32% aerial / 7% dash attack. The model needs to know stick magnitude before predicting whether A means "jab a moving opponent", "tilt them in combo", or "aerial drift". The autoregressive A | stick ordering captures this. A fully independent factoring would still work but waste a meaningful conditional signal.
 
 ## Action states (Fox)
 
@@ -198,16 +213,16 @@ Note that some IDs (354, 356) are character-specific — libmelee's `Action` enu
 ```
 main_stick:  81-class categorical (9×9 grid, edges {-1.0, -0.8, -0.5, -0.28, 0, 0.28, 0.5, 0.8, 1.0})
 cstick:       9-class categorical {center, 8 octants}
-shield:       4-class {none, light (0.30-0.40), mid (0.40-0.95), full (≥0.95)}
-A:            Bernoulli, autoregressive on stick   (~7× rate change conditional on stick)
+shield:       3-class {none, lightshield (~0.30), full (1.0)} — bridge emits 0.0 / 0.35 / 1.0
+A:            Bernoulli, autoregressive on stick   (action mix changes 50% aerial → 64% utilt → 32% aerial across mag buckets)
 B:            Bernoulli                            (mostly independent of A)
-jump:         Bernoulli, "X|Y combined"
+jump:         Bernoulli, "X|Y combined"            (game treats them identically)
 Z:            Bernoulli                            (grabs)
 [Start:       masked out everywhere — never pressed mid-game]
 [L vs R digital: collapsed into shield head — game treats them identically]
 ```
 
-Effective output size: 81 + 9 + 4 + 1 + 1 + 1 + 1 = 98 logits per frame.
+Effective output size: 81 + 9 + 3 + 1 + 1 + 1 + 1 = 97 logits per frame.
 
 The X|Y and L|R digital collapses are lossless from the game's perspective — the in-game ASM that polls the controller sets the same bit regardless of which physical button was pressed. Slippi just records them separately because they're physically separate buttons.
 
