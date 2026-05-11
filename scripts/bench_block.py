@@ -11,6 +11,12 @@ import argparse, time
 import torch
 from mamba_ssm import Mamba, Mamba2
 
+try:
+    from mamba_ssm.modules.mamba3 import Mamba3
+    HAS_MAMBA3 = True
+except ImportError:
+    HAS_MAMBA3 = False
+
 
 def time_fn(make_block, x_shape, n_warmup=2, n_iter=5):
     block = make_block().to(x_shape["device"]).to(x_shape["dtype"])
@@ -47,8 +53,10 @@ def main():
     device = args.device
 
     print(f"device={device} dtype={args.dtype}\n")
-    print(f"{'config':<36} | {'Mamba1':>30} | {'Mamba2':>30}")
-    print(f"{'':<36} | {'time   mem   params':>30} | {'time   mem   params':>30}")
+    cols = ["Mamba1", "Mamba2"] + (["Mamba3"] if HAS_MAMBA3 else [])
+    header = f"{'config':<36} | " + " | ".join(f"{c:>30}" for c in cols)
+    print(header)
+    print(f"{'':<36} | " + " | ".join(f"{'time   mem   params':>30}" for _ in cols))
     configs = [
         # (bsz, L, d_model, d_state)
         (32, 256,  384, 16),
@@ -79,6 +87,18 @@ def main():
         except Exception as e:
             line += f" {'ERR:'+type(e).__name__:>30} |"
         torch.cuda.empty_cache()
+
+        # Mamba-3 (non-MIMO; MIMO variant needs sm_90+)
+        if HAS_MAMBA3:
+            try:
+                ms, gb, n = time_fn(
+                    lambda: Mamba3(d_model=d_model, d_state=d_state, expand=2,
+                                    headdim=64, n_layer=8, chunk_size=64),
+                    x_shape)
+                line += f" {ms:>7.1f}ms {gb:>5.2f}GB {n/1e6:>5.2f}M |"
+            except Exception as e:
+                line += f" {'ERR:'+type(e).__name__:>30} |"
+            torch.cuda.empty_cache()
 
         print(line)
 

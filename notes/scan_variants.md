@@ -118,9 +118,28 @@ The newest entry in the line, published at ICLR 2026 ([arXiv:2603.15569](https:/
 
 Reported results at 1.5B scale: ~1.8 pp better average downstream accuracy than the next-best linear model (Gated DeltaNet), and matches Mamba-2's perplexity at *half* the state size.
 
-Available in `mamba-ssm ≥ 2.3` as `Mamba3`. **Catch:** the kernel uses Triton APIs (`triton.set_allocator`) that only exist in Triton ≥ 3.3, which only ships with PyTorch ≥ 2.7. Our stack right now is PyTorch 2.6 + Triton 3.2, so Mamba-3 isn't installable here without a torch upgrade. Worth doing once we're past the prototyping phase, but not urgent — Mamba-2 is plenty for the v1 model.
+Available in `mamba-ssm ≥ 2.3` as `Mamba3`. Requires Triton ≥ 3.3 (ships with torch ≥ 2.7); we're on torch 2.9.1+cu126 / triton 3.5.1.
 
-For our project: aspirational target. Plan: ship a Mamba-2 model first, profile, then evaluate whether Mamba-3 is worth the toolchain churn (probably yes given the half-state-for-equal-quality claim — meaningful for our 24 GB VRAM budget).
+Block-level full-block bench on our 4090 (`scripts/bench_block.py`, bf16, fwd+bwd, mean of 5 iters):
+
+| config | Mamba-1 | Mamba-2 | Mamba-3 |
+|---|---|---|---|
+| bsz=32 L=1024 D=384 N=16  | 14.4 ms / 0.69 GB | 15.5 ms / 0.73 GB | **11.5 ms** / 0.64 GB |
+| bsz=32 L=1024 D=384 N=64  | 35.8 ms / 0.73 GB | **16.0 ms** / 1.03 GB | 22.9 ms / 1.13 GB |
+| bsz=32 L=1024 D=384 N=128 | 98.1 ms / 0.79 GB | 27.3 ms / 1.14 GB | **25.2 ms** / 1.48 GB |
+| bsz=16 L=4096 D=384 N=128 | 156.7 ms / 1.53 GB | **42.5 ms** / 1.71 GB | 50.9 ms / 2.35 GB |
+
+Observations from these specific shapes:
+- At our likely training shape (L=1024, N=128), Mamba-3 is marginally faster than Mamba-2 (~8%) but uses ~30% more memory (the complex-state representation).
+- At longer sequences (L=4096), Mamba-2 reclaims a small lead.
+- At smaller N, results are mixed — Mamba-1 still wins on the very smallest configs because the kernel is simpler.
+- The numbers above don't test the "half-state for equal quality" claim — that requires actually training. Verifying that on our task means: train Mamba-3 with N=64 vs Mamba-2 with N=128 to convergence, compare losses. If the claim holds, we get the same quality at half the memory — a real win on a 24 GB box.
+
+**MIMO variant** (`Mamba3(is_mimo=True, ...)`): doesn't work on the 4090. The MIMO kernel uses TileLang and emits Blackwell-era FP4 instructions (`__nv_cvt_double2_to_e8m0x2`) for `sm_90+` hardware. We're on `sm_89` (Ada). Standard Mamba-3 works fine; MIMO is off-limits without different hardware.
+
+**Architectural note:** Mamba-3 has no `conv1d` at the front of the block (unlike Mamba-1/2). The depthwise causal convolution is replaced by mechanisms inside the recurrence itself (RoPE-style positional encoding, complex state). One fewer thing to tune; one fewer thing to swap to a CUDA-fused variant.
+
+For our project: try both. The non-MIMO variant is a drop-in alternative to Mamba-2 with comparable speed at our scale. If training shows the half-state claim holds, it's our v2 default.
 
 ### Hybrid SSM + attention
 
