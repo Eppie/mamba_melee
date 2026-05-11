@@ -93,14 +93,34 @@ A non-exhaustive but selective tour, ranked roughly by relevance to our control 
 
 ### Mamba-2 / SSD (Dao & Gu, 2024)
 
-The successor to Mamba-1 ([State Space Duality, arXiv:2405.21060](https://arxiv.org/abs/2405.21060)). Reformulates the selective scan as a structured matrix multiply (the "SSD" — state-space duality), which exposes much more parallelism inside each scan. In practice:
-- **~2–3× faster training** than Mamba-1 at the same effective state size.
-- **~8× larger d_state** at iso-throughput, so the model can keep more "memory" per channel.
-- Same recurrent-form inference latency as Mamba-1.
+The first major successor to Mamba-1 ([State Space Duality, arXiv:2405.21060](https://arxiv.org/abs/2405.21060)). Reformulates the selective scan as a chunked structured matrix multiply (the "SSD" — state-space duality), which exposes much more parallelism inside each scan. The block also reorganises into a multi-head structure with scalar A per head (rather than Mamba-1's per-channel `(D, N)` state matrix).
 
-This is the obvious upgrade path. Same `mamba-ssm` package ships it (`Mamba2` block alongside `Mamba` block). The block layout is slightly different (uses `d_head` instead of independent channels), but the integration into a model is essentially the same.
+Direct kernel comparison on a 4090, bf16, fwd+bwd time, mean of 10 iters (`scripts/bench_ssd.py`):
 
-**For our project:** strong default. Try Mamba-1 first to get a working baseline, then swap to Mamba-2.
+| config | Mamba-1 selective_scan_fn | Mamba-2 mamba_chunk_scan_combined |
+|---|---|---|
+| bsz=32 L=1024 D=384 N=16  | 1.1 ms / 0.18 GB | 2.5 ms / 0.41 GB |
+| bsz=32 L=1024 D=384 N=128 | 12.2 ms / 0.32 GB | **2.5 ms / 0.44 GB** (≈5× faster) |
+| bsz=16 L=4096 D=384 N=128 | 19.6 ms / 0.53 GB | **3.4 ms / 0.87 GB** (≈6× faster) |
+| bsz=8  L=1024 D=768 N=128 | 4.0 ms / 0.27 GB | **2.0 ms / 0.43 GB** |
+
+So the SSD kernel is faster than Mamba-1's selective scan at any N ≥ ~64, by a factor that grows with N and L. At N=16 (Mamba-1's old default) the simpler kernel wins; at N=128 (Mamba-2's default and what people actually use) SSD wins by ~5× and that gap widens for longer sequences. Memory is roughly comparable.
+
+For our project: strong default. Get a Mamba-1 baseline working first to verify the rest of the pipeline; swap to Mamba-2 once it's proven, free training-throughput win.
+
+### Mamba-3 (Dao & Gu et al., March 2026)
+
+The newest entry in the line, published at ICLR 2026 ([arXiv:2603.15569](https://arxiv.org/abs/2603.15569)). Three claimed improvements:
+
+1. **More expressive recurrence** — derived from a more careful SSM discretization (vs Mamba-2's first-order discretization).
+2. **Complex-valued state update** — enables "richer state tracking" by allowing oscillatory dynamics in the state, not just exponential decay.
+3. **MIMO formulation** — multi-input multi-output state structure that improves quality without increasing decode latency.
+
+Reported results at 1.5B scale: ~1.8 pp better average downstream accuracy than the next-best linear model (Gated DeltaNet), and matches Mamba-2's perplexity at *half* the state size.
+
+Available in `mamba-ssm ≥ 2.3` as `Mamba3`. **Catch:** the kernel uses Triton APIs (`triton.set_allocator`) that only exist in Triton ≥ 3.3, which only ships with PyTorch ≥ 2.7. Our stack right now is PyTorch 2.6 + Triton 3.2, so Mamba-3 isn't installable here without a torch upgrade. Worth doing once we're past the prototyping phase, but not urgent — Mamba-2 is plenty for the v1 model.
+
+For our project: aspirational target. Plan: ship a Mamba-2 model first, profile, then evaluate whether Mamba-3 is worth the toolchain churn (probably yes given the half-state-for-equal-quality claim — meaningful for our 24 GB VRAM budget).
 
 ### Hybrid SSM + attention
 
@@ -129,9 +149,10 @@ The pure-SSM theoretical case is "linear-time, fixed-state" — but a couple of 
 - **Long-context tricks** (sparse attention, RAG hybrids, infinite-context schemes) — we don't need 100k tokens. 1024 covers ~17 seconds of game time which is probably all the context that's load-bearing for a control decision.
 - **Vision Mamba / Mamba-Byte / etc.** — domain-specific variants for images / bytes. Not applicable.
 
-## Recommendation for v1
+## Recommendation
 
-- **Block:** Mamba-2 (SSD), 8–12 layers, d_model 384, d_state 128.
+- **v1 block:** Mamba-2 (SSD), 8–12 layers, d_model 384, d_state 128.
+- **v2 upgrade path:** swap to Mamba-3 once the pipeline is stable and we're willing to bump torch ≥ 2.7 / triton ≥ 3.3. Half the state for equal quality is worth a real chunk of our 24 GB.
 - **Backbone:** pure SSM. Skip attention layers initially.
-- **Implementation:** `mamba-ssm`'s `Mamba2` for training; the recurrent-form `step()` for 60 Hz inference.
+- **Implementation:** `mamba-ssm`'s `Mamba2` block for training; the recurrent-form `step()` for 60 Hz inference.
 - **Reference:** keep our pure-PyTorch `seq` impl around for unit tests on small configs.
